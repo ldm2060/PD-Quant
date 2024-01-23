@@ -11,32 +11,32 @@ if __name__ == "__main__":
     
     if args.exp_name == "resnet18":
         for i in range(4):
-            os.system(f"python main_imagenet.py --data_path /content/imagenet --arch resnet18 --n_bits_w {w_bits[i]} --n_bits_a {a_bits[i]} --weight 0.01 --T 4.0 --lamb_c 0.02")
+            os.system(f"python main_imagenet.py --data_path /data/ILSVRC2012 --arch resnet18 --n_bits_w {w_bits[i]} --n_bits_a {a_bits[i]} --weight 0.01 --T 4.0 --lamb_c 0.02")
             time.sleep(0.5)
 
     if args.exp_name == "resnet50":
         for i in range(4):
-            os.system(f"python main_imagenet.py --data_path /content/imagenet --arch resnet50 --n_bits_w {w_bits[i]} --n_bits_a {a_bits[i]} --weight 0.01 --T 4.0 --lamb_c 0.02")
+            os.system(f"python main_imagenet.py --data_path /data/ILSVRC2012 --arch resnet50 --n_bits_w {w_bits[i]} --n_bits_a {a_bits[i]} --weight 0.01 --T 4.0 --lamb_c 0.02")
             time.sleep(0.5)
 
     if args.exp_name == "regnetx_600m":
         for i in range(4):
-            os.system(f"python main_imagenet.py --data_path /content/imagenet --arch regnetx_600m --n_bits_w {w_bits[i]} --n_bits_a {a_bits[i]} --weight 0.01 --T 4.0 --lamb_c 0.01")
+            os.system(f"python main_imagenet.py --data_path /data/ILSVRC2012 --arch regnetx_600m --n_bits_w {w_bits[i]} --n_bits_a {a_bits[i]} --weight 0.01 --T 4.0 --lamb_c 0.01")
             time.sleep(0.5)
     
     if args.exp_name == "regnetx_3200m":
         for i in range(4):
-            os.system(f"python main_imagenet.py --data_path /content/imagenet --arch regnetx_3200m --n_bits_w {w_bits[i]} --n_bits_a {a_bits[i]} --weight 0.01 --T 4.0 --lamb_c 0.01")
+            os.system(f"python main_imagenet.py --data_path /data/ILSVRC2012 --arch regnetx_3200m --n_bits_w {w_bits[i]} --n_bits_a {a_bits[i]} --weight 0.01 --T 4.0 --lamb_c 0.01")
             time.sleep(0.5)
     
     if args.exp_name == "mobilenetv2":
         for i in range(4):
-            os.system(f"python main_imagenet.py --data_path /content/imagenet --arch mobilenetv2 --n_bits_w {w_bits[i]} --n_bits_a {a_bits[i]} --weight 0.1 --T 1.0 --lamb_c 0.005")
+            os.system(f"python main_imagenet.py --data_path /data/ILSVRC2012 --arch mobilenetv2 --n_bits_w {w_bits[i]} --n_bits_a {a_bits[i]} --weight 0.1 --T 1.0 --lamb_c 0.005")
             time.sleep(0.5)
     
     if args.exp_name == "mnasnet":
         for i in range(4):
-            os.system(f"python main_imagenet.py --data_path /content/imagenet --arch mnasnet --n_bits_w {w_bits[i]} --n_bits_a {a_bits[i]} --weight 0.2 --T 1.0 --lamb_c 0.001")
+            os.system(f"python main_imagenet.py --data_path /data/ILSVRC2012 --arch mnasnet --n_bits_w {w_bits[i]} --n_bits_a {a_bits[i]} --weight 0.2 --T 1.0 --lamb_c 0.001")
             time.sleep(0.5)
 
     

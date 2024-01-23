@@ -10,21 +10,22 @@ from .quant_block import BaseQuantBlock, specials_unquantized
 
 include = False
 def find_unquantized_module(model: torch.nn.Module, module_list: list = [], name_list: list = []):
-    """Store subsequent unquantized modules in a list"""
-    global include
+    '''在给定的模型中查找并存储未量化的模块'''
+    #Store subsequent unquantized modules in a list
+    global include #标记是否需要将模块添加到列表中
     for name, module in model.named_children():
-        if isinstance(module, (QuantModule, BaseQuantBlock)):
-            if not module.trained:
+        if isinstance(module, (QuantModule, BaseQuantBlock)): #是QuantModule或BaseQuantBlock的实例
+            if not module.trained: #尚未训练
                 include = True
-                module.set_quant_state(False,False)
+                module.set_quant_state(False,False) #模块的量化状态设置为False
                 name_list.append(name)
                 module_list.append(module)
-        elif include and type(module) in specials_unquantized:
+        elif include and type(module) in specials_unquantized: #include为True，并且模块的类型在specials_unquantized列表中
             name_list.append(name)
             module_list.append(module)
-        else:
-            find_unquantized_module(module, module_list, name_list)
-    return module_list[1:], name_list[1:]
+        else: 
+            find_unquantized_module(module, module_list, name_list) #对子模块进行递归调用
+    return module_list[1:], name_list[1:] #返回包含模块和模块名称的列表，但是排除了列表的第一个元素。这是因为在递归调用中，列表的第一个元素可能会被重复添加
 
 def layer_reconstruction(model: QuantModel, fp_model: QuantModel, layer: QuantModule, fp_layer: QuantModule,
                         cali_data: torch.Tensor,batch_size: int = 32, iters: int = 20000, weight: float = 0.001,
@@ -32,35 +33,39 @@ def layer_reconstruction(model: QuantModel, fp_model: QuantModel, layer: QuantMo
                         warmup: float = 0.0, p: float = 2.0, lr: float = 4e-5, input_prob: float = 1.0, 
                         keep_gpu: bool = True, lamb_r: float = 0.2, T: float = 7.0, bn_lr: float = 1e-3, lamb_c=0.02):
     """
-    Reconstruction to optimize the output from each layer.
+    用于重构量化模块的函数，用于AdaRound中的优化
 
-    :param model: QuantModel
-    :param layer: QuantModule that needs to be optimized
-    :param cali_data: data for calibration, typically 1024 training images, as described in AdaRound
-    :param batch_size: mini-batch size for reconstruction
-    :param iters: optimization iterations for reconstruction,
-    :param weight: the weight of rounding regularization term
-    :param opt_mode: optimization mode
-    :param asym: asymmetric optimization designed in AdaRound, use quant input to reconstruct fp output
-    :param include_act_func: optimize the output after activation function
-    :param b_range: temperature range
-    :param warmup: proportion of iterations that no scheduling for temperature
-    :param lr: learning rate for act delta learning
-    :param p: L_p norm minimization
-    :param lamb_r: hyper-parameter for regularization
-    :param T: temperature coefficient for KL divergence
-    :param bn_lr: learning rate for DC
-    :param lamb_c: hyper-parameter for DC
+    :param model: QuantModel 模型对象，用于量化的模型
+    :param fp_model: QuantModel FP模型对象，用于参考
+    :param layer: QuantModule 需要优化的量化模块
+    :param fp_layer: QuantModule FP模块对象，用于参考
+    :param cali_data: torch.Tensor 用于校准的数据，通常是1024个训练图像，如AdaRound中所述
+    :param batch_size: int 重构的小批量大小，默认为32
+    :param iters: int 重构的优化迭代次数，默认为20000
+    :param weight: float 舍入正则化项的权重，默认为0.001
+    :param opt_mode: str 优化模式，默认为'mse'
+    :param b_range: tuple 温度范围，默认为(20, 2)
+    :param warmup: float 温度调度的迭代比例，默认为0.0
+    :param p: float L_p范数最小化，默认为2.0
+    :param lr: float 激活函数学习率，默认为4e-5
+    :param input_prob: float 输入概率，默认为1.0
+    :param keep_gpu: bool 是否保持在GPU上，默认为True
+    :param lamb_r: float 正则化的超参数，默认为0.2
+    :param T: float KL散度的温度系数，默认为7.0
+    :param bn_lr: float BN学习率，默认为1e-3
+    :param lamb_c: float DC的超参数，默认为0.02
     """
 
     '''get input and set scale'''
+    # 获取输入并设置缩放
     cached_inps = get_init(model, layer, cali_data, batch_size=batch_size,
-                                        input_prob=True, keep_gpu=keep_gpu)
+                                        input_prob=True, keep_gpu=keep_gpu) #获取并保存模型在给定层级的输入数据
     cached_outs, cached_output, cur_syms = get_dc_fp_init(fp_model, fp_layer, cali_data, batch_size=batch_size,
-                                        input_prob=True, keep_gpu=keep_gpu, bn_lr=bn_lr, lamb=lamb_c)
-    set_act_quantize_params(layer, cali_data=cached_inps[:min(256, cached_inps.size(0))])
+                                        input_prob=True, keep_gpu=keep_gpu, bn_lr=bn_lr, lamb=lamb_c) #获取并保存模型在给定层级的直流分量数据
+    set_act_quantize_params(layer, cali_data=cached_inps[:min(256, cached_inps.size(0))]) #设置或初始化激活量化器中的步长和零点
 
     '''set state'''
+    # 设置状态
     cur_weight, cur_act = True, True
     
     global include
@@ -71,23 +76,27 @@ def layer_reconstruction(model: QuantModel, fp_model: QuantModel, layer: QuantMo
         para.requires_grad = False
 
     '''set quantizer'''
+    # 设置量化器
     round_mode = 'learned_hard_sigmoid'
-    # Replace weight quantizer to AdaRoundQuantizer
+    # 替换权重量化器为AdaRoundQuantizer
     w_para, a_para = [], []
     w_opt, a_opt = None, None
     scheduler, a_scheduler = None, None
 
     '''weight'''
+    # 权重量化器
     layer.weight_quantizer = AdaRoundQuantizer(uaq=layer.weight_quantizer, round_mode=round_mode,
                                                weight_tensor=layer.org_weight.data)
     layer.weight_quantizer.soft_targets = True
     w_para += [layer.weight_quantizer.alpha]
 
     '''activation'''
+    # 激活量化器
     if layer.act_quantizer.delta is not None:
         layer.act_quantizer.delta = torch.nn.Parameter(torch.tensor(layer.act_quantizer.delta))
         a_para += [layer.act_quantizer.delta]
     '''set up drop'''
+    # 设置dropout
     layer.act_quantizer.is_training = True
 
     if len(w_para) != 0:
@@ -121,14 +130,15 @@ def layer_reconstruction(model: QuantModel, fp_model: QuantModel, layer: QuantMo
         out_all = layer(cur_inp)
         
         '''forward for prediction difference'''
+        # 用于预测差异的前向传播
         out_drop = out_all[:batch_size]
         out_quant = out_all[batch_size:]
         output = out_quant
         for num, module in enumerate(module_list):
-            # for ResNet and RegNet
+            # 对于ResNet和RegNet
             if name_list[num] == 'fc':
                 output = torch.flatten(output, 1)
-            # for MobileNet and MNasNet
+            # 对于MobileNet和MNasNet
             if isinstance(module, torch.nn.Dropout):
                 output = output.mean([2, 3])
             output = module(output)
