@@ -9,7 +9,23 @@ from .set_act_quantize_params import set_act_quantize_params
 
 include = False
 def find_unquantized_module(model: torch.nn.Module, module_list: list = [], name_list: list = []):
-    """Store subsequent unquantized modules in a list"""
+    """
+    在模型中查找未量化的模块，并将其存储在列表中。
+
+    参数：
+    model: torch.nn.Module
+        要查找未量化模块的模型。
+    module_list: list, optional
+        存储未量化模块的列表，默认为空列表。
+    name_list: list, optional
+        存储未量化模块名称的列表，默认为空列表。
+
+    返回值：
+    module_list: list
+        存储未量化模块的列表，不包括输入模型本身。
+    name_list: list
+        存储未量化模块名称的列表，不包括输入模型本身。
+    """
     global include
     for name, module in model.named_children():
         if isinstance(module, (QuantModule, BaseQuantBlock)):
@@ -32,28 +48,28 @@ def block_reconstruction(model: QuantModel, fp_model: QuantModel, block: BaseQua
                         input_prob: float = 1.0, keep_gpu: bool = True, 
                         lamb_r: float = 0.2, T: float = 7.0, bn_lr: float = 1e-3, lamb_c=0.02):
     """
-    Reconstruction to optimize the output from each block.
+    用于优化每个块的输出的重构。
 
     :param model: QuantModel
-    :param block: BaseQuantBlock that needs to be optimized
-    :param cali_data: data for calibration, typically 1024 training images, as described in AdaRound
-    :param batch_size: mini-batch size for reconstruction
-    :param iters: optimization iterations for reconstruction,
-    :param weight: the weight of rounding regularization term
-    :param opt_mode: optimization mode
-    :param asym: asymmetric optimization designed in AdaRound, use quant input to reconstruct fp output
-    :param include_act_func: optimize the output after activation function
-    :param b_range: temperature range
-    :param warmup: proportion of iterations that no scheduling for temperature
-    :param lr: learning rate for act delta learning
-    :param p: L_p norm minimization
-    :param lamb_r: hyper-parameter for regularization
-    :param T: temperature coefficient for KL divergence
-    :param bn_lr: learning rate for DC
-    :param lamb_c: hyper-parameter for DC
+    :param block: 需要优化的BaseQuantBlock
+    :param cali_data: 用于校准的数据，通常是1024个训练图像，如AdaRound中所述
+    :param batch_size: 重构的小批量大小
+    :param iters: 重构的优化迭代次数
+    :param weight: 舍入正则化项的权重
+    :param opt_mode: 优化模式
+    :param asym: 在AdaRound中设计的非对称优化，使用量化输入来重构fp输出
+    :param include_act_func: 优化激活函数后的输出
+    :param b_range: 温度范围
+    :param warmup: 温度调度中不进行调度的迭代比例
+    :param lr: 学习率，用于学习act delta
+    :param p: L_p范数最小化
+    :param lamb_r: 正则化的超参数
+    :param T: KL散度的温度系数
+    :param bn_lr: DC的学习率
+    :param lamb_c: DC的超参数
     """
 
-    '''get input and set scale'''
+    '''获取输入并设置比例'''
     cached_inps = get_init(model, block, cali_data, batch_size=batch_size, 
                                         input_prob=True, keep_gpu=keep_gpu)
     cached_outs, cached_output, cur_syms = get_dc_fp_init(fp_model, fp_block, cali_data, batch_size=batch_size, 
@@ -72,7 +88,7 @@ def block_reconstruction(model: QuantModel, fp_model: QuantModel, block: BaseQua
 
     '''set quantizer'''
     round_mode = 'learned_hard_sigmoid'
-    # Replace weight quantizer to AdaRoundQuantizer
+    # 将权重量化器替换为AdaRoundQuantizer
     w_para, a_para = [], []
     w_opt, a_opt = None, None
     scheduler, a_scheduler = None, None
@@ -93,10 +109,10 @@ def block_reconstruction(model: QuantModel, fp_model: QuantModel, block: BaseQua
             module.act_quantizer.is_training = True
 
     if len(w_para) != 0:
-        w_opt = torch.optim.Adam(w_para, lr=3e-3)
+        w_opt = torch.optim.Adam(w_para, lr=3e-3)#权重学习率
     if len(a_para) != 0:
-        a_opt = torch.optim.Adam(a_para, lr=lr)
-        a_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(a_opt, T_max=iters, eta_min=0.)
+        a_opt = torch.optim.Adam(a_para, lr=lr)#激活函数学习率
+        a_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(a_opt, T_max=iters, eta_min=0.)#余弦退火调度器
 
     loss_mode = 'relaxation'
     rec_loss = opt_mode
@@ -137,13 +153,13 @@ def block_reconstruction(model: QuantModel, fp_model: QuantModel, block: BaseQua
         err = loss_func(out_drop, cur_out, output, output_fp)
 
         err.backward(retain_graph=True)
-        if w_opt:
+        if w_opt:#更新权重
             w_opt.step()    
-        if a_opt:
+        if a_opt:#  更新激活函数
             a_opt.step()
-        if scheduler:
+        if scheduler:#更新学习率
             scheduler.step()
-        if a_scheduler:
+        if a_scheduler:#更新学习率
             a_scheduler.step()
     torch.cuda.empty_cache()
 
@@ -183,28 +199,26 @@ class LossFunction:
         self.T = T
 
         self.temp_decay = LinearTempDecay(max_count, rel_start_decay=warmup + (1 - warmup) * decay_start,
-                                          start_b=b_range[0], end_b=b_range[1])
+                                          start_b=b_range[0], end_b=b_range[1])#温度调度
         self.count = 0
-        self.pd_loss = torch.nn.KLDivLoss(reduction='batchmean')
+        self.pd_loss = torch.nn.KLDivLoss(reduction='batchmean')#KL散度损失
 
     def __call__(self, pred, tgt, output, output_fp):
         """
-        Compute the total loss for adaptive rounding:
-        rec_loss is the quadratic output reconstruction loss, round_loss is
-        a regularization term to optimize the rounding policy, pd_loss is the 
-        prediction difference loss.
+        计算自适应舍入的总损失函数：
+        rec_loss是输出重构损失，round_loss是优化舍入策略的正则化项，pd_loss是预测差异损失。
 
-        :param pred: output from quantized model
-        :param tgt: output from FP model
-        :param output: prediction from quantized model
-        :param output_fp: prediction from FP model
-        :return: total loss function
+        :param pred: 量化模型的输出
+        :param tgt: FP模型的输出
+        :param output: 量化模型的预测
+        :param output_fp: FP模型的预测
+        :return: 总损失函数
         """
         self.count += 1
         if self.rec_loss == 'mse':
             rec_loss = lp_loss(pred, tgt, p=self.p)
         else:
-            raise ValueError('Not supported reconstruction loss function: {}'.format(self.rec_loss))
+            raise ValueError('不支持的重构损失函数：{}'.format(self.rec_loss))
 
         pd_loss = self.pd_loss(F.log_softmax(output / self.T, dim=1), F.softmax(output_fp / self.T, dim=1)) / self.lam
 
@@ -222,7 +236,7 @@ class LossFunction:
 
         total_loss = rec_loss + round_loss + pd_loss
         if self.count % 500 == 0:
-            print('Total loss:\t{:.3f} (rec:{:.3f}, pd:{:.3f}, round:{:.3f})\tb={:.2f}\tcount={}'.format(
+            print('总损失：\t{:.3f} (重构损失:{:.3f}, 预测差异损失:{:.3f}, 舍入损失:{:.3f})\tb={:.2f}\tcount={}'.format(
                 float(total_loss), float(rec_loss), float(pd_loss), float(round_loss), b, self.count))
         return total_loss
 
@@ -236,9 +250,9 @@ class LinearTempDecay:
 
     def __call__(self, t):
         """
-        Cosine annealing scheduler for temperature b.
-        :param t: the current time step
-        :return: scheduled temperature
+        用于温度b的余弦退火调度器。
+        :param t: 当前时间步
+        :return: 调度后的温度
         """
         if t < self.start_decay:
             return self.start_b

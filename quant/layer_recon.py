@@ -78,7 +78,6 @@ def layer_reconstruction(model: QuantModel, fp_model: QuantModel, layer: QuantMo
     '''set quantizer'''
     # 设置量化器
     round_mode = 'learned_hard_sigmoid'
-    # 替换权重量化器为AdaRoundQuantizer
     w_para, a_para = [], []
     w_opt, a_opt = None, None
     scheduler, a_scheduler = None, None
@@ -155,9 +154,9 @@ def layer_reconstruction(model: QuantModel, fp_model: QuantModel, layer: QuantMo
             a_scheduler.step()
     torch.cuda.empty_cache()
 
-    layer.weight_quantizer.soft_targets = False
-    layer.act_quantizer.is_training = False
-    layer.trained = True
+    layer.weight_quantizer.soft_targets = False#标记权重量化的软目标为False
+    layer.act_quantizer.is_training = False#标记激活量化模块不在训练
+    layer.trained = True#标记模块已经训练过了
 
 
 class LossFunction:
@@ -173,7 +172,21 @@ class LossFunction:
                  p: float = 2.,
                  lam: float = 1.0,
                  T: float = 7.0):
+        """
+        初始化LossFunction对象。
 
+        :param layer: 量化模块。
+        :param round_loss: 舍入损失的类型。默认为'relaxation'。
+        :param weight: 舍入损失的权重。默认为1.0。
+        :param rec_loss: 重构损失的类型。默认为'mse'。
+        :param max_count: 最大计数。默认为2000。
+        :param b_range: b值的范围。默认为(10, 2)。
+        :param decay_start: 衰减开始值。默认为0.0。
+        :param warmup: 热身值。默认为0.0。
+        :param p: p值。默认为2.0。
+        :param lam: lam值。默认为1.0。
+        :param T: T值。默认为7.0。
+        """
         self.layer = layer
         self.round_loss = round_loss
         self.weight = weight
@@ -184,42 +197,40 @@ class LossFunction:
         self.T = T
 
         self.temp_decay = LinearTempDecay(max_count, rel_start_decay=warmup + (1 - warmup) * decay_start,
-                                          start_b=b_range[0], end_b=b_range[1])
+                                          start_b=b_range[0], end_b=b_range[1])#温度衰减
         self.count = 0
-        self.pd_loss = torch.nn.KLDivLoss(reduction='batchmean')
+        self.pd_loss = torch.nn.KLDivLoss(reduction='batchmean')#KL散度损失
 
     def __call__(self, pred, tgt, output, output_fp):
         """
-        Compute the total loss for adaptive rounding:
-        rec_loss is the quadratic output reconstruction loss, round_loss is
-        a regularization term to optimize the rounding policy, pd_loss is the 
-        prediction difference loss.
+        计算自适应舍入的总损失：
+        rec_loss是二次输出重构损失，round_loss是优化舍入策略的正则化项，pd_loss是预测差异损失。
 
-        :param pred: output from quantized model
-        :param tgt: output from FP model
-        :param output: prediction from quantized model
-        :param output_fp: prediction from FP model
-        :return: total loss function
+        :param pred: 量化模型的输出
+        :param tgt: FP模型的输出
+        :param output: 量化模型的预测
+        :param output_fp: FP模型的预测
+        :return: 总损失函数
         """
         self.count += 1
         if self.rec_loss == 'mse':
-            rec_loss = lp_loss(pred, tgt, p=self.p)
+            rec_loss = lp_loss(pred, tgt, p=self.p)#均方误差损失
         else:
-            raise ValueError('Not supported reconstruction loss function: {}'.format(self.rec_loss))
+            raise ValueError('不支持的重构损失函数：{}'.format(self.rec_loss))
 
-        pd_loss = self.pd_loss(F.log_softmax(output / self.T, dim=1), F.softmax(output_fp / self.T, dim=1)) / self.lam
+        pd_loss = self.pd_loss(F.log_softmax(output / self.T, dim=1), F.softmax(output_fp / self.T, dim=1)) / self.lam #KL散度损失
 
-        b = self.temp_decay(self.count)
-        if self.count < self.loss_start or self.round_loss == 'none':
-            b = round_loss = 0
-        elif self.round_loss == 'relaxation':
-            round_loss = 0
-            round_vals = self.layer.weight_quantizer.get_soft_targets()
-            round_loss += self.weight * (1 - ((round_vals - .5).abs() * 2).pow(b)).sum()
+        b = self.temp_decay(self.count) #温度衰减
+        if self.count < self.loss_start or self.round_loss == 'none':#如果计数小于损失开始值或者舍入损失为none
+            b = round_loss = 0#舍入损失为0
+        elif self.round_loss == 'relaxation':#如果舍入损失为relaxation
+            round_loss = 0#舍入损失为0
+            round_vals = self.layer.weight_quantizer.get_soft_targets()#获取量化器的软目标
+            round_loss += self.weight * (1 - ((round_vals - .5).abs() * 2).pow(b)).sum()#计算舍入损失
         else:
             raise NotImplementedError
-        total_loss = rec_loss + round_loss + pd_loss
+        total_loss = rec_loss + round_loss + pd_loss#总损失
         if self.count % 500 == 0:
-            print('Total loss:\t{:.3f} (rec:{:.3f}, pd:{:.3f}, round:{:.3f})\tb={:.2f}\tcount={}'.format(
+            print('总损失：\t{:.3f} (重构损失:{:.3f}, 预测差异损失:{:.3f}, 舍入损失:{:.3f})\tb={:.2f}\t计数={}'.format(
                 float(total_loss), float(rec_loss), float(pd_loss), float(round_loss), b, self.count))
         return total_loss
